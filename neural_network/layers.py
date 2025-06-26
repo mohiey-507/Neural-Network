@@ -1,54 +1,3 @@
-"""
-layers.py
-
-This module provides implementations of various neural network layers, each inheriting 
-from the BaseLayer class. These layers are fundamental building blocks for constructing 
-neural network architectures.
-
-Classes:
-    - Flatten: Reshapes input tensor to a flattened 2D tensor, used for transitioning 
-        between convolutional/pooling layers and dense layers.
-    
-    - Dropout: Implements dropout regularization to prevent overfitting by randomly 
-        setting a fraction of input units to 0 during training.
-    
-    - Dense: Fully connected layer implementing linear transformation with optional 
-        activation function, bias, and weight initialization.
-    
-    - BatchNorm: Batch normalization layer to normalize layer inputs, reducing internal 
-        covariate shift and improving training stability.
-
-Usage:
-    To use the layers defined in this module, import the desired layer class and create 
-    instances of it, passing necessary parameters as required. For example:
-
-        from layers import Dense, Dropout
-
-        dense_layer = Dense(units=128, activation='relu')
-        dropout_layer = Dropout(rate=0.5)
-
-Example:
-    Below is a simple example demonstrating how to use the layers to build a neural network:
-
-        from layers import Dense, Dropout, Flatten, BatchNorm
-
-        class SimpleNN:
-            def __init__(self):
-                self.flatten = Flatten()
-                self.batch_norm = BatchNorm()
-                self.dense1 = Dense(units=64, activation='relu')
-                self.dropout = Dropout(rate=0.3)
-                self.dense2 = Dense(units=10, activation='softmax')
-
-            def forward(self, x):
-                x = self.flatten.forward(x)
-                x = self.batch_norm.forward(x)
-                x = self.dense1.forward(x)
-                x = self.dropout.forward(x)
-                x = self.dense2.forward(x)
-                return x
-"""
-
 import numpy as np
 from typing import Optional, Tuple
 from neural_network.base import BaseLayer
@@ -65,6 +14,12 @@ class Flatten(BaseLayer):
         input (np.ndarray): Original input tensor before flattening.
         output (np.ndarray): Flattened output tensor.
     """
+    def __init__(
+            self, 
+            name: Optional[str] = None
+    ):
+        super().__init__(name)
+
     def forward(
             self,
             inputs: np.ndarray, 
@@ -80,9 +35,7 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Flattened output tensor.
         """
-        self.input = inputs
-        self.output = inputs.reshape(inputs.shape[0], -1)
-        return self.output
+        return inputs.reshape(self.input_shape[0], -1)
 
     def backward(
             self, 
@@ -97,7 +50,7 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Reshaped gradient tensor with the same shape as the input.
         """
-        return gradient.reshape(self.input.shape)
+        return gradient.reshape(self.input_shape)
 
 
 class Dropout(BaseLayer):
@@ -120,13 +73,6 @@ class Dropout(BaseLayer):
             rate: float, 
             name: Optional[str] = None
     ):
-        """
-        Initializes the Dropout layer.
-
-        Args:
-            rate (float): Fraction of input units to drop (0 < rate < 1).
-            name (Optional[str]): Optional name for the layer.
-        """
         super().__init__(name)
         self.rate = rate
         self.mask = None
@@ -146,7 +92,6 @@ class Dropout(BaseLayer):
         Returns:
             np.ndarray: Output tensor after applying dropout.
         """
-        self.input = inputs
         if training:
             self.mask = np.random.binomial(1, 1 - self.rate, size=inputs.shape) / (1 - self.rate) # rescales the mask
             return inputs * self.mask
@@ -173,7 +118,6 @@ class Dense(BaseLayer):
     Fully connected (dense) neural network layer.
     
     Implements linear transformation: output = activation(dot(input, weights) + bias)
-    Supports various activation functions and optional bias.
     
     Attributes:
         units (int): Number of neurons in the layer.
@@ -194,15 +138,6 @@ class Dense(BaseLayer):
             use_bias: bool = True,
             name: Optional[str] = None
     ):
-        """
-        Initializes the Dense layer.
-
-        Args:
-            units (int): Number of neurons in the layer.
-            activation (Optional[str]): Name of the activation function.
-            use_bias (bool): Whether to include a bias term. Defaults to True.
-            name (Optional[str]): Optional name for the layer.
-        """
         super().__init__(name)
         self.units = units
         self.activation = activation
@@ -223,12 +158,18 @@ class Dense(BaseLayer):
         """
         super().build(input_shape)
         input_dim = np.prod(input_shape[1:])
-        self.weights = np.random.randn(input_dim, self.units) * 0.01
-        self.bias = np.zeros((1, self.units)) if self.use_bias else None
         self.output_shape = (input_shape[0], self.units)
-
+        fan_in, fan_out = input_dim, self.units
+        if self.activation and self.activation.lower() in ('relu', 'leaky_relu', 'elu'):
+            self.weights = np.random.randn(fan_in, fan_out) * np.sqrt(2.0 / fan_in)
+        else:
+            limit = np.sqrt(6.0 / (fan_in + fan_out))
+            self.weights = np.random.uniform(-limit, limit, size=(fan_in, fan_out))
+        if self.use_bias:
+            self.bias = np.zeros((1, self.units))
+    
     def forward(
-            self, 
+            self,   
             inputs: np.ndarray, 
             training: bool = True
     ) -> np.ndarray:
@@ -265,7 +206,10 @@ class Dense(BaseLayer):
         self.gradients['weights'] = np.dot(self.input.T, gradient)
         if self.use_bias:
             self.gradients['bias'] = np.sum(gradient, axis=0, keepdims=True)
-        return np.dot(gradient, self.weights.T)
+        out = gradient @ self.weights.T
+        self.input = None
+        self.output = None
+        return out
 
     def _apply_activation(
             self, 
@@ -280,8 +224,10 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Output tensor after applying the activation function.
         """
-        activation_fn = getattr(Activation, self.activation, None)
+        if not self.activation:
+            return inputs
 
+        activation_fn = getattr(Activation, self.activation, None)
         if activation_fn is not None:
             return activation_fn(inputs)
         return inputs
@@ -299,8 +245,10 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Gradient tensor after applying the activation function gradient.
         """
-        activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
+        if not self.activation:
+            return gradient
 
+        activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
         if activation_gradient_fn is not None:
             return gradient * activation_gradient_fn(self.output)
         return gradient
@@ -311,7 +259,6 @@ class BatchNorm(BaseLayer):
     Batch Normalization layer to normalize layer inputs.
     
     Normalizes input by subtracting mean and scaling by standard deviation. 
-    Maintains running statistics during training for use during inference.
     
     Attributes:
         epsilon (float): Small value to prevent division by zero.
@@ -347,14 +294,14 @@ class BatchNorm(BaseLayer):
         self.running_mean = None
         self.running_var = None
         self.cache = None
-        self.gradients = {}  # Initialize gradients dictionary
+        self.gradients = {}
         
     def build(
         self, 
         input_shape: Tuple
     ) -> None:
         """
-        Builds the BatchNorm layer by initializing parameters based on input shape.
+        Initializes BatchNorm layer parameters.
 
         Args:
             input_shape (Tuple): Shape of the input data, including batch size.
@@ -385,25 +332,30 @@ class BatchNorm(BaseLayer):
 
         Returns:
             np.ndarray: Normalized output of the layer.
-        """
-        self.input = inputs
-        
+        """        
         if training:
             mean = np.mean(inputs, axis=0)
             var = np.var(inputs, axis=0) + self.epsilon
-            
+
             # Update running statistics
             self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
             self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
-            
+
             # Normalize
-            x_normalized = (inputs - mean) / np.sqrt(var)
-            self.cache = (x_normalized, mean, var, inputs)
+            x_centered = inputs - mean
+            std_inv = 1.0 / np.sqrt(var)
+            x_normalized = x_centered * std_inv
+
+            # Cache only what is needed for backward
+            self.cache = (x_centered, std_inv)
         else:
-            x_normalized = (inputs - self.running_mean) / np.sqrt(self.running_var + self.epsilon)
+            std_inv = 1.0 / np.sqrt(self.running_var + self.epsilon)
+            x_centered = inputs - self.running_mean
+            x_normalized = x_centered * std_inv
+            self.cache = None
             
-        self.output = self.gamma * x_normalized + self.beta
-        return self.output
+        out = self.gamma * x_normalized + self.beta
+        return out
     
     def backward(
             self, 
@@ -421,22 +373,65 @@ class BatchNorm(BaseLayer):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input of the layer.
         """
-        x_normalized, mean, var, x = self.cache
+        x_centered, std_inv = self.cache
         N = gradient.shape[0]
-        
-        # Compute gradients for gamma and beta
+
+        # Gradients for gamma and beta
+        x_normalized = x_centered * std_inv
         self.gradients['gamma'] = np.sum(gradient * x_normalized, axis=0)
         self.gradients['beta'] = np.sum(gradient, axis=0)
-        
-        # Compute gradient with respect to normalized input
-        dx_normalized = gradient * self.gamma
-        
-        # Compute gradients with respect to input
-        dvar = np.sum(dx_normalized * (x - mean) * -0.5 * var**(-1.5), axis=0)
-        dmean = np.sum(dx_normalized * -1/np.sqrt(var), axis=0) + dvar * np.mean(-2.0 * (x - mean), axis=0)
-        
-        dx = dx_normalized / np.sqrt(var) 
-        dx += 2.0 * dvar * (x - mean) / N
-        dx += dmean / N
-        
+
+        # Backprop through normalization
+        dx_norm = gradient * self.gamma
+
+        dvar = np.sum(dx_norm * x_centered * -0.5 * std_inv**3, axis=0)
+        dmean = np.sum(dx_norm * -std_inv, axis=0) + dvar * np.mean(-2.0 * x_centered, axis=0)
+
+        dx = dx_norm * std_inv + dvar * 2.0 * x_centered / N + dmean / N
+
+        self.cache = None
+        return dx
+
+class LayerNorm(BaseLayer):
+    """Layer Normalization for 3-D tensors (B, S, D)"""
+    def __init__(self, epsilon: float = 1e-5, name: Optional[str] = None):
+        super().__init__(name)
+        self.epsilon = epsilon
+        self.gamma: np.ndarray = None  # (1, 1, D)
+        self.beta: np.ndarray = None   # (1, 1, D)
+        self.cache = None
+        self.gradients = {}
+
+    def build(self, input_shape: Tuple):
+        super().build(input_shape)
+        D = input_shape[-1]
+        self.gamma = np.ones((1, 1, D))
+        self.beta = np.zeros((1, 1, D))
+        self.output_shape = input_shape
+
+    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+        mean = inputs.mean(axis=-1, keepdims=True)
+        var = inputs.var(axis=-1, keepdims=True)
+        std_inv = 1.0 / np.sqrt(var + self.epsilon)
+        x_norm = (inputs - mean) * std_inv
+        # Cache minimal tensors needed for backward
+        self.cache = (x_norm, std_inv)
+        return self.gamma * x_norm + self.beta
+
+    def backward(self, gradient: np.ndarray) -> np.ndarray:
+        x_norm, std_inv = self.cache
+        # Gradients for gamma and beta
+        self.gradients['gamma'] = np.sum(gradient * x_norm, axis=(0, 1), keepdims=True)
+        self.gradients['beta'] = np.sum(gradient, axis=(0, 1), keepdims=True)
+
+        N = x_norm.shape[-1]  # feature dimension (D)
+        dx_norm = gradient * self.gamma
+
+        # Backprop through normalization
+        sum_dx = np.sum(dx_norm, axis=-1, keepdims=True)
+        sum_dx_xnorm = np.sum(dx_norm * x_norm, axis=-1, keepdims=True)
+
+        dx = (dx_norm - sum_dx / N - x_norm * sum_dx_xnorm / N) * std_inv
+
+        self.cache = None
         return dx
