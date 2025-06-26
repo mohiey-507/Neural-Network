@@ -14,6 +14,12 @@ class Flatten(BaseLayer):
         input (np.ndarray): Original input tensor before flattening.
         output (np.ndarray): Flattened output tensor.
     """
+    def __init__(
+            self, 
+            name: Optional[str] = None
+    ):
+        super().__init__(name)
+
     def forward(
             self,
             inputs: np.ndarray, 
@@ -29,9 +35,8 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Flattened output tensor.
         """
-        self.input = inputs
-        self.output = inputs.reshape(inputs.shape[0], -1)
-        return self.output
+        self.input_shape = inputs.shape
+        return inputs.reshape(inputs.shape[0], -1)
 
     def backward(
             self, 
@@ -46,7 +51,7 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Reshaped gradient tensor with the same shape as the input.
         """
-        return gradient.reshape(self.input.shape)
+        return gradient.reshape(self.input_shape)
 
 
 class Dropout(BaseLayer):
@@ -69,13 +74,6 @@ class Dropout(BaseLayer):
             rate: float, 
             name: Optional[str] = None
     ):
-        """
-        Initializes the Dropout layer.
-
-        Args:
-            rate (float): Fraction of input units to drop (0 < rate < 1).
-            name (Optional[str]): Optional name for the layer.
-        """
         super().__init__(name)
         self.rate = rate
         self.mask = None
@@ -95,7 +93,6 @@ class Dropout(BaseLayer):
         Returns:
             np.ndarray: Output tensor after applying dropout.
         """
-        self.input = inputs
         if training:
             self.mask = np.random.binomial(1, 1 - self.rate, size=inputs.shape) / (1 - self.rate) # rescales the mask
             return inputs * self.mask
