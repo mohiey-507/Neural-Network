@@ -224,7 +224,7 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Output tensor after applying the activation function.
         """
-        if self.activation is None:
+        if not self.activation:
             return inputs
 
         activation_fn = getattr(Activation, self.activation, None)
@@ -245,7 +245,7 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Gradient tensor after applying the activation function gradient.
         """
-        if self.activation is None:
+        if not self.activation:
             return gradient
 
         activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
@@ -259,7 +259,6 @@ class BatchNorm(BaseLayer):
     Batch Normalization layer to normalize layer inputs.
     
     Normalizes input by subtracting mean and scaling by standard deviation. 
-    Maintains running statistics during training for use during inference.
     
     Attributes:
         epsilon (float): Small value to prevent division by zero.
@@ -295,14 +294,14 @@ class BatchNorm(BaseLayer):
         self.running_mean = None
         self.running_var = None
         self.cache = None
-        self.gradients = {}  # Initialize gradients dictionary
+        self.gradients = {}
         
     def build(
         self, 
         input_shape: Tuple
     ) -> None:
         """
-        Builds the BatchNorm layer by initializing parameters based on input shape.
+        Initializes BatchNorm layer parameters.
 
         Args:
             input_shape (Tuple): Shape of the input data, including batch size.
@@ -333,25 +332,30 @@ class BatchNorm(BaseLayer):
 
         Returns:
             np.ndarray: Normalized output of the layer.
-        """
-        self.input = inputs
-        
+        """        
         if training:
             mean = np.mean(inputs, axis=0)
             var = np.var(inputs, axis=0) + self.epsilon
-            
+
             # Update running statistics
             self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
             self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
-            
+
             # Normalize
-            x_normalized = (inputs - mean) / np.sqrt(var)
-            self.cache = (x_normalized, mean, var, inputs)
+            x_centered = inputs - mean
+            std_inv = 1.0 / np.sqrt(var)
+            x_normalized = x_centered * std_inv
+
+            # Cache only what is needed for backward
+            self.cache = (x_centered, std_inv)
         else:
-            x_normalized = (inputs - self.running_mean) / np.sqrt(self.running_var + self.epsilon)
+            std_inv = 1.0 / np.sqrt(self.running_var + self.epsilon)
+            x_centered = inputs - self.running_mean
+            x_normalized = x_centered * std_inv
+            self.cache = None
             
-        self.output = self.gamma * x_normalized + self.beta
-        return self.output
+        out = self.gamma * x_normalized + self.beta
+        return out
     
     def backward(
             self, 
@@ -369,22 +373,22 @@ class BatchNorm(BaseLayer):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input of the layer.
         """
-        x_normalized, mean, var, x = self.cache
+        x_centered, std_inv = self.cache
         N = gradient.shape[0]
-        
-        # Compute gradients for gamma and beta
+
+        # Gradients for gamma and beta
+        x_normalized = x_centered * std_inv
         self.gradients['gamma'] = np.sum(gradient * x_normalized, axis=0)
         self.gradients['beta'] = np.sum(gradient, axis=0)
-        
-        # Compute gradient with respect to normalized input
-        dx_normalized = gradient * self.gamma
-        
-        # Compute gradients with respect to input
-        dvar = np.sum(dx_normalized * (x - mean) * -0.5 * var**(-1.5), axis=0)
-        dmean = np.sum(dx_normalized * -1/np.sqrt(var), axis=0) + dvar * np.mean(-2.0 * (x - mean), axis=0)
-        
-        dx = dx_normalized / np.sqrt(var) 
-        dx += 2.0 * dvar * (x - mean) / N
-        dx += dmean / N
-        
+
+        # Backprop through normalization
+        dx_norm = gradient * self.gamma
+
+        dvar = np.sum(dx_norm * x_centered * -0.5 * std_inv**3, axis=0)
+        dmean = np.sum(dx_norm * -std_inv, axis=0) + dvar * np.mean(-2.0 * x_centered, axis=0)
+
+        dx = dx_norm * std_inv + dvar * 2.0 * x_centered / N + dmean / N
+
+        # Free cache to save memory
+        self.cache = None
         return dx
