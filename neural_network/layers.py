@@ -35,8 +35,7 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Flattened output tensor.
         """
-        self.input_shape = inputs.shape
-        return inputs.reshape(inputs.shape[0], -1)
+        return inputs.reshape(self.input_shape[0], -1)
 
     def backward(
             self, 
@@ -119,7 +118,6 @@ class Dense(BaseLayer):
     Fully connected (dense) neural network layer.
     
     Implements linear transformation: output = activation(dot(input, weights) + bias)
-    Supports various activation functions and optional bias.
     
     Attributes:
         units (int): Number of neurons in the layer.
@@ -140,15 +138,6 @@ class Dense(BaseLayer):
             use_bias: bool = True,
             name: Optional[str] = None
     ):
-        """
-        Initializes the Dense layer.
-
-        Args:
-            units (int): Number of neurons in the layer.
-            activation (Optional[str]): Name of the activation function.
-            use_bias (bool): Whether to include a bias term. Defaults to True.
-            name (Optional[str]): Optional name for the layer.
-        """
         super().__init__(name)
         self.units = units
         self.activation = activation
@@ -169,12 +158,18 @@ class Dense(BaseLayer):
         """
         super().build(input_shape)
         input_dim = np.prod(input_shape[1:])
-        self.weights = np.random.randn(input_dim, self.units) * 0.01
-        self.bias = np.zeros((1, self.units)) if self.use_bias else None
         self.output_shape = (input_shape[0], self.units)
-
+        fan_in, fan_out = input_dim, self.units
+        if self.activation and self.activation.lower() in ('relu', 'leaky_relu', 'elu'):
+            self.weights = np.random.randn(fan_in, fan_out) * np.sqrt(2.0 / fan_in)
+        else:
+            limit = np.sqrt(6.0 / (fan_in + fan_out))
+            self.weights = np.random.uniform(-limit, limit, size=(fan_in, fan_out))
+        if self.use_bias:
+            self.bias = np.zeros((1, self.units))
+    
     def forward(
-            self, 
+            self,   
             inputs: np.ndarray, 
             training: bool = True
     ) -> np.ndarray:
@@ -211,7 +206,10 @@ class Dense(BaseLayer):
         self.gradients['weights'] = np.dot(self.input.T, gradient)
         if self.use_bias:
             self.gradients['bias'] = np.sum(gradient, axis=0, keepdims=True)
-        return np.dot(gradient, self.weights.T)
+        out = gradient @ self.weights.T
+        self.input = None
+        self.output = None
+        return out
 
     def _apply_activation(
             self, 
@@ -226,8 +224,10 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Output tensor after applying the activation function.
         """
-        activation_fn = getattr(Activation, self.activation, None)
+        if self.activation is None:
+            return inputs
 
+        activation_fn = getattr(Activation, self.activation, None)
         if activation_fn is not None:
             return activation_fn(inputs)
         return inputs
@@ -245,8 +245,10 @@ class Dense(BaseLayer):
         Returns:
             np.ndarray: Gradient tensor after applying the activation function gradient.
         """
-        activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
+        if self.activation is None:
+            return gradient
 
+        activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
         if activation_gradient_fn is not None:
             return gradient * activation_gradient_fn(self.output)
         return gradient
