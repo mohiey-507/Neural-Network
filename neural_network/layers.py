@@ -447,3 +447,67 @@ class LayerNorm(BaseLayer):
 
         self.cache = None
         return dx
+
+
+class Embedding(BaseLayer):
+    """Embedding layer mapping integer indices (B, S) to dense vectors (B, S, D)."""
+    def __init__(
+        self,
+        vocab_size: int,
+        embed_dim: int,
+        init_scale: float = 0.01,
+        mask_zero: bool = False,
+        name: Optional[str] = None,
+    ):
+        super().__init__(name)
+        self.vocab_size = vocab_size
+        self.embed_dim = embed_dim
+        self.init_scale = init_scale
+        self.mask_zero = mask_zero
+        self.embeddings: np.ndarray = None  # (V, D)
+        self.gradients = {}
+
+
+    def build(
+        self, 
+        input_shape: Tuple
+    ) -> None:
+        """
+        Initializes the embedding layer with random weights.
+
+        Args:
+            input_shape (Tuple): Shape of the input data, including batch size,
+            expected as (B, S).
+        """
+        super().build(input_shape) # (B, S)
+        self.embeddings = np.random.uniform(-self.init_scale, self.init_scale, size=(self.vocab_size, self.embed_dim)).astype(float)
+        self.output_shape = (input_shape[0], input_shape[1], self.embed_dim)
+
+    def forward(
+        self, 
+        inputs: np.ndarray,
+        training: bool = True
+    ) -> np.ndarray:
+        self.input = inputs.astype(int)
+        out = self.embeddings[self.input]
+        return out
+
+    def backward(
+        self, 
+        gradient: np.ndarray
+    ) -> np.ndarray:
+        # gradient shape: (B, S, D)
+        self.gradients['embeddings'] = np.zeros_like(self.embeddings)
+        indices = self.input.flatten()
+        grad_flat = gradient.reshape(-1, self.embed_dim)
+
+        # If padding index 0 should be ignored
+        if self.mask_zero:
+            mask = indices != 0
+            np.add.at(self.gradients['embeddings'], indices[mask], grad_flat[mask])
+        else:
+            np.add.at(self.gradients['embeddings'], indices, grad_flat)
+
+        self.input = None
+        # No gradient flows to the integer inputs
+        return np.zeros((gradient.shape[0], gradient.shape[1]))
