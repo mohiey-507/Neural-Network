@@ -238,15 +238,17 @@ class Network:
         This method applies the optimizer's update rules to adjust the weights 
         of the layers based on the computed gradients.
         """
-        for layer in self.layers:
+        for layer in self._trainable_layers:
             if hasattr(layer, 'weights') and layer.weights is not None:
                 self.optimizer.update(layer, 'weights', layer.gradients['weights'])
-                if layer.use_bias:
-                    self.optimizer.update(layer, 'bias', layer.gradients['bias'])
-            elif hasattr(layer, 'gamma') and layer.gamma is not None:
+            if hasattr(layer, 'bias') and layer.bias is not None:
+                self.optimizer.update(layer, 'bias', layer.gradients['bias'])
+            if hasattr(layer, 'gamma') and layer.gamma is not None:
                 self.optimizer.update(layer, 'gamma', layer.gradients['gamma'])
+            if hasattr(layer, 'beta') and layer.beta is not None:
                 self.optimizer.update(layer, 'beta', layer.gradients['beta'])
-
+            if hasattr(layer, 'embeddings') and layer.embeddings is not None:
+                self.optimizer.update(layer, 'embeddings', layer.gradients['embeddings'])
 
     def _train_on_batch(
             self, 
