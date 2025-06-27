@@ -511,3 +511,130 @@ class Embedding(BaseLayer):
         self.input = None
         # No gradient flows to the integer inputs
         return np.zeros((gradient.shape[0], gradient.shape[1]))
+
+
+class MultiHeadAttention(BaseLayer):
+    """Multi-Head Self-Attention working completely in (B, S, D) space.
+
+    Internally uses two shared `Dense` sub-layers:
+        • `qkv_dense`: single linear that projects input to concatenated Q, K, V.
+        • `out_dense`: linear that projects concatenated context back to model dim.
+
+    This keeps weight initialisation / optimiser logic in one place (the `Dense`
+    implementation) and guarantees shape compatibility with the rest of the
+    framework (Dense expects 2-D (B, F) input, so we temporarily flatten the
+    (B, S, D) sequence to (B·S, D)).
+    """
+    def __init__(self, embed_dim: int, num_heads: int, name: Optional[str] = None):
+        super().__init__(name)
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+
+        # Sub-layers (exposed for optimizers)
+        self.qkv_dense = Dense(units=3 * embed_dim, use_bias=False)
+        self.out_dense = Dense(units=embed_dim, use_bias=False)
+        self.sub_layers = [self.qkv_dense, self.out_dense]
+
+        # caches / grads
+        self.attn_weights = None
+        self.projections = None  # Qh, Kh, Vh
+        self.gradients = {}
+
+    # ---------------------------------------------------------------------
+    # helpers
+    def _split_heads(self, x: np.ndarray) -> np.ndarray:
+        """(B, S, D) → (B, H, S, D/H)"""
+        B, S, _ = x.shape
+        return x.reshape(B, S, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def _combine_heads(self, x: np.ndarray) -> np.ndarray:
+        """(B, H, S, D/H) → (B, S, D)"""
+        B, H, S, Dh = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, S, H * Dh)
+
+    # ---------------------------------------------------------------------
+    def build(self, input_shape: Tuple):
+        """Build sub dense layers based on (B, S, D) input shape."""
+        super().build(input_shape)
+        B, S, D = input_shape
+        assert D == self.embed_dim, "Input last dim must equal embed_dim"
+
+        flat_shape = (B * S, D)
+        self.qkv_dense.build(flat_shape)
+        self.out_dense.build(flat_shape)
+        self.output_shape = input_shape
+
+    # ---------------------------------------------------------------------
+    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+        self.input = inputs  # cache for residual math
+        B, S, D = inputs.shape
+
+        # 1. QKV projection in a single matmul via Dense
+        flat_in = inputs.reshape(B * S, D)
+        qkv = self.qkv_dense.forward(flat_in, training)  # (B*S, 3D)
+        qkv = qkv.reshape(B, S, 3 * D)
+        Q, K, V = np.split(qkv, 3, axis=-1)  # each (B,S,D)
+
+        # 2. split into heads
+        Qh, Kh, Vh = self._split_heads(Q), self._split_heads(K), self._split_heads(V)
+
+        # 3. scaled dot-product attention
+        scores = Qh @ Kh.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)  # (B,H,S,S)
+        weights = np.exp(scores - scores.max(axis=-1, keepdims=True))
+        weights /= weights.sum(axis=-1, keepdims=True)
+
+        context = weights @ Vh  # (B,H,S,D/H)
+        context_combined = self._combine_heads(context)  # (B,S,D)
+
+        # 4. output projection
+        out_flat = context_combined.reshape(B * S, D)
+        out_proj = self.out_dense.forward(out_flat, training)
+        self.output = out_proj.reshape(B, S, D)
+
+        # cache for backward
+        self.attn_weights = weights
+        self.projections = (Qh, Kh, Vh)
+        self.context = context_combined
+        return self.output
+
+    # ---------------------------------------------------------------------
+    def backward(self, gradient: np.ndarray) -> np.ndarray:
+        B, S, D = gradient.shape
+
+        # 1. Backprop through output Dense
+        grad_flat = gradient.reshape(B * S, D)
+        d_context_combined_flat = self.out_dense.backward(grad_flat)  # (B*S, D)
+        d_context_combined = d_context_combined_flat.reshape(B, S, D)
+
+        # 2. Backprop through attention combine
+        d_context_h = self._split_heads(d_context_combined)  # (B,H,S,D/H)
+
+        Qh, Kh, Vh = self.projections
+        weights = self.attn_weights
+
+        # Grad w.r.t attention weights and V
+        d_weights = d_context_h @ Vh.transpose(0, 1, 3, 2)  # (B,H,S,S)
+        d_Vh = weights.transpose(0, 1, 3, 2) @ d_context_h  # (B,H,S,D/H)
+
+        # softmax derivative
+        dw_times_w = d_weights * weights
+        d_scores = dw_times_w - weights * dw_times_w.sum(axis=-1, keepdims=True)
+        d_scores /= np.sqrt(self.head_dim)
+
+        d_Qh = d_scores @ Kh
+        d_Kh = d_scores.transpose(0, 1, 3, 2) @ Qh
+
+        # merge head grads
+        d_Q = self._combine_heads(d_Qh)  # (B,S,D)
+        d_K = self._combine_heads(d_Kh)
+        d_V = self._combine_heads(d_Vh)
+
+        # 3. Concatenate Q,K,V grads and send through QKV dense
+        d_qkv = np.concatenate([d_Q, d_K, d_V], axis=-1)  # (B,S,3D)
+        d_qkv_flat = d_qkv.reshape(B * S, 3 * D)
+        d_inputs_flat = self.qkv_dense.backward(d_qkv_flat)  # (B*S, D)
+        d_inputs = d_inputs_flat.reshape(B, S, D)
+
+        return d_inputs
