@@ -319,6 +319,10 @@ class Network:
         Returns:
             float: The computed accuracy as a fraction of correct predictions.
         """
+        if y_pred.ndim == 3:
+            B, S, C = y_pred.shape
+            y_pred = y_pred.reshape(B * S, C)
+            y_true = y_true.reshape(B * S, C)
         if y_true.shape[1] == 1:  # Binary classification
             label = (y_pred > 0.5).astype(int)
         else:  # Multiclass classification
