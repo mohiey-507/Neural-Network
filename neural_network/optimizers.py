@@ -165,14 +165,13 @@ class Momentum(Optimizer):
         """
         super().setup(layers)
         self.velocities = {}
+        trainable_attributes = ['weights', 'bias', 'gamma', 'beta', 'embeddings']
         for i, layer in enumerate(layers):
-            if hasattr(layer, 'weights'):
-                self.velocities[f'layer_{i}_weights'] = np.zeros_like(layer.weights)
-                if layer.use_bias:
-                    self.velocities[f'layer_{i}_bias'] = np.zeros_like(layer.bias)
-            elif hasattr(layer, 'gamma'):
-                self.velocities[f'layer_{i}_gamma'] = np.zeros_like(layer.gamma)
-                self.velocities[f'layer_{i}_beta'] = np.zeros_like(layer.beta)
+            for attr_name in trainable_attributes:
+                if hasattr(layer, attr_name):
+                    param = getattr(layer, attr_name)
+                    if isinstance(param, np.ndarray):
+                        self.velocities[f'layer_{i}_{attr_name}'] = np.zeros_like(param)
     
     def update(
             self, 
@@ -194,6 +193,8 @@ class Momentum(Optimizer):
         """
         if hasattr(layer, gradient_key):
             velocity_key = f'layer_{self.layers.index(layer)}_{gradient_key}'
+            if velocity_key not in self.velocities:
+                self.velocities[velocity_key] = np.zeros_like(gradient)
             self.velocities[velocity_key] = (self.momentum * self.velocities[velocity_key] + 
                                            self.learning_rate * gradient)
             parameter = getattr(layer, gradient_key)
@@ -246,18 +247,14 @@ class Adam(Optimizer):
         super().setup(layers)
         self.m = {}
         self.v = {}
+        trainable_attributes = ['weights', 'bias', 'gamma', 'beta', 'embeddings']
         for i, layer in enumerate(layers):
-            if hasattr(layer, 'weights'):
-                self.m[f'layer_{i}_weights'] = np.zeros_like(layer.weights)
-                self.v[f'layer_{i}_weights'] = np.zeros_like(layer.weights)
-                if layer.use_bias:
-                    self.m[f'layer_{i}_bias'] = np.zeros_like(layer.bias)
-                    self.v[f'layer_{i}_bias'] = np.zeros_like(layer.bias)
-            elif hasattr(layer, 'gamma'):
-                self.m[f'layer_{i}_gamma'] = np.zeros_like(layer.gamma)
-                self.v[f'layer_{i}_gamma'] = np.zeros_like(layer.gamma)
-                self.m[f'layer_{i}_beta'] = np.zeros_like(layer.beta)
-                self.v[f'layer_{i}_beta'] = np.zeros_like(layer.beta)
+            for attr_name in trainable_attributes:
+                if hasattr(layer, attr_name):
+                    param = getattr(layer, attr_name)
+                    if isinstance(param, np.ndarray):
+                        self.m[f'layer_{i}_{attr_name}'] = np.zeros_like(param)
+                        self.v[f'layer_{i}_{attr_name}'] = np.zeros_like(param)
     
     def update(
             self, 
@@ -281,6 +278,12 @@ class Adam(Optimizer):
         if hasattr(layer, gradient_key):
             self.t += 1
             param_key = f'layer_{self.layers.index(layer)}_{gradient_key}'
+            
+            # Initialize m and v if they don't exist
+            if param_key not in self.m:
+                self.m[param_key] = np.zeros_like(gradient)
+            if param_key not in self.v:
+                self.v[param_key] = np.zeros_like(gradient)
             
             # Update biased first moment estimate
             self.m[param_key] = (self.beta1 * self.m[param_key] + 

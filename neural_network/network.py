@@ -87,6 +87,8 @@ class Network:
         self.loss_grad = None
         self.optimizer: Optional[OptimizerProtocol] = None
         self.input_shape = None
+        # Flattened list of all trainable layers (including nested sub_layers)
+        self._trainable_layers: List[BaseLayer] = []
 
     def add(
             self, 
@@ -103,6 +105,22 @@ class Network:
         """
         self.layers.append(layer)
         
+    def _collect_trainable_layers(self, layers: List[BaseLayer]) -> List[BaseLayer]:
+        """Recursively collect layers that expose trainable parameters.
+
+        This makes sure nested compositions (e.g., MultiHeadAttention containing
+        internal Dense layers) are included for optimizer updates.
+        """
+        flat = []
+        for layer in layers:
+            # If the layer has internal sub_layers attribute, dive in first
+            if hasattr(layer, 'sub_layers') and isinstance(layer.sub_layers, list):
+                flat.extend(self._collect_trainable_layers(layer.sub_layers))
+            # Include the layer itself if it has any recognised trainable attr
+            if any(hasattr(layer, attr) for attr in ('weights', 'gamma', 'embeddings')):
+                flat.append(layer)
+        return flat
+
     def _build(
             self, 
             input_shape: Tuple[int, ...]
@@ -168,8 +186,9 @@ class Network:
         else:
             self.optimizer = optimizer
         
-        # Setup optimizer
-        self.optimizer.setup(self.layers)
+        # Setup optimizer with flattened trainable layers (handles nested)
+        self._trainable_layers = self._collect_trainable_layers(self.layers)
+        self.optimizer.setup(self._trainable_layers)
 
     def _forward(
             self, 
@@ -219,15 +238,17 @@ class Network:
         This method applies the optimizer's update rules to adjust the weights 
         of the layers based on the computed gradients.
         """
-        for layer in self.layers:
+        for layer in self._trainable_layers:
             if hasattr(layer, 'weights') and layer.weights is not None:
                 self.optimizer.update(layer, 'weights', layer.gradients['weights'])
-                if layer.use_bias:
-                    self.optimizer.update(layer, 'bias', layer.gradients['bias'])
-            elif hasattr(layer, 'gamma') and layer.gamma is not None:
+            if hasattr(layer, 'bias') and layer.bias is not None:
+                self.optimizer.update(layer, 'bias', layer.gradients['bias'])
+            if hasattr(layer, 'gamma') and layer.gamma is not None:
                 self.optimizer.update(layer, 'gamma', layer.gradients['gamma'])
+            if hasattr(layer, 'beta') and layer.beta is not None:
                 self.optimizer.update(layer, 'beta', layer.gradients['beta'])
-
+            if hasattr(layer, 'embeddings') and layer.embeddings is not None:
+                self.optimizer.update(layer, 'embeddings', layer.gradients['embeddings'])
 
     def _train_on_batch(
             self, 
@@ -298,6 +319,10 @@ class Network:
         Returns:
             float: The computed accuracy as a fraction of correct predictions.
         """
+        if y_pred.ndim == 3:
+            B, S, C = y_pred.shape
+            y_pred = y_pred.reshape(B * S, C)
+            y_true = y_true.reshape(B * S, C)
         if y_true.shape[1] == 1:  # Binary classification
             label = (y_pred > 0.5).astype(int)
         else:  # Multiclass classification

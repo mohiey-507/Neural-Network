@@ -209,3 +209,4 @@ __marimo__/
 .DS_Store
 
 layers_test.py
+test_network.py
