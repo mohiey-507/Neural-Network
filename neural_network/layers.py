@@ -134,7 +134,7 @@ class Dense(BaseLayer):
     """
     def __init__(
             self, units: int,
-            activation: str = Optional[str],
+            activation: Optional[str] = None,
             use_bias: bool = True,
             name: Optional[str] = None
     ):
