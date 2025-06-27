@@ -394,7 +394,11 @@ class BatchNorm(BaseLayer):
 
 class LayerNorm(BaseLayer):
     """Layer Normalization for 3-D tensors (B, S, D)"""
-    def __init__(self, epsilon: float = 1e-5, name: Optional[str] = None):
+    def __init__(
+        self, 
+        epsilon: float = 1e-5, 
+        name: Optional[str] = None
+    ):
         super().__init__(name)
         self.epsilon = epsilon
         self.gamma: np.ndarray = None  # (1, 1, D)
@@ -402,25 +406,33 @@ class LayerNorm(BaseLayer):
         self.cache = None
         self.gradients = {}
 
-    def build(self, input_shape: Tuple):
+    def build(
+        self, 
+        input_shape: Tuple
+    ):
         super().build(input_shape)
         D = input_shape[-1]
         self.gamma = np.ones((1, 1, D))
         self.beta = np.zeros((1, 1, D))
         self.output_shape = input_shape
 
-    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(
+        self, 
+        inputs: np.ndarray, 
+        training: bool = True
+    ) -> np.ndarray:
         mean = inputs.mean(axis=-1, keepdims=True)
         var = inputs.var(axis=-1, keepdims=True)
         std_inv = 1.0 / np.sqrt(var + self.epsilon)
         x_norm = (inputs - mean) * std_inv
-        # Cache minimal tensors needed for backward
         self.cache = (x_norm, std_inv)
         return self.gamma * x_norm + self.beta
 
-    def backward(self, gradient: np.ndarray) -> np.ndarray:
+    def backward(
+        self, 
+        gradient: np.ndarray
+    ) -> np.ndarray:
         x_norm, std_inv = self.cache
-        # Gradients for gamma and beta
         self.gradients['gamma'] = np.sum(gradient * x_norm, axis=(0, 1), keepdims=True)
         self.gradients['beta'] = np.sum(gradient, axis=(0, 1), keepdims=True)
 
