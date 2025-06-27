@@ -87,6 +87,8 @@ class Network:
         self.loss_grad = None
         self.optimizer: Optional[OptimizerProtocol] = None
         self.input_shape = None
+        # Flattened list of all trainable layers (including nested sub_layers)
+        self._trainable_layers: List[BaseLayer] = []
 
     def add(
             self, 
@@ -103,6 +105,22 @@ class Network:
         """
         self.layers.append(layer)
         
+    def _collect_trainable_layers(self, layers: List[BaseLayer]) -> List[BaseLayer]:
+        """Recursively collect layers that expose trainable parameters.
+
+        This makes sure nested compositions (e.g., MultiHeadAttention containing
+        internal Dense layers) are included for optimizer updates.
+        """
+        flat = []
+        for layer in layers:
+            # If the layer has internal sub_layers attribute, dive in first
+            if hasattr(layer, 'sub_layers') and isinstance(layer.sub_layers, list):
+                flat.extend(self._collect_trainable_layers(layer.sub_layers))
+            # Include the layer itself if it has any recognised trainable attr
+            if any(hasattr(layer, attr) for attr in ('weights', 'gamma', 'embeddings')):
+                flat.append(layer)
+        return flat
+
     def _build(
             self, 
             input_shape: Tuple[int, ...]
@@ -168,8 +186,9 @@ class Network:
         else:
             self.optimizer = optimizer
         
-        # Setup optimizer
-        self.optimizer.setup(self.layers)
+        # Setup optimizer with flattened trainable layers (handles nested)
+        self._trainable_layers = self._collect_trainable_layers(self.layers)
+        self.optimizer.setup(self._trainable_layers)
 
     def _forward(
             self, 
