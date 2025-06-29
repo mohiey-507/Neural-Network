@@ -35,7 +35,9 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Flattened output tensor.
         """
-        return inputs.reshape(self.input_shape[0], -1)
+        # Store input shape for backward pass
+        self.input_shape = inputs.shape
+        return inputs.reshape(inputs.shape[0], -1)
 
     def backward(
             self, 
@@ -50,6 +52,7 @@ class Flatten(BaseLayer):
         Returns:
             np.ndarray: Reshaped gradient tensor with the same shape as the input.
         """
+        # Reshape gradient back to original input shape
         return gradient.reshape(self.input_shape)
 
 
@@ -638,3 +641,149 @@ class MultiHeadAttention(BaseLayer):
         d_inputs = d_inputs_flat.reshape(B, S, D)
 
         return d_inputs
+
+
+class TransformerEncoderLayer(BaseLayer):
+    """
+    Transformer Encoder layer implementing the standard Transformer architecture.
+    
+    Architecture:
+    Input (B,S,D) → LayerNorm → MHA → Add & Norm → FFN → Add & Norm → Output (B,S,D)
+    
+    Args:
+        embed_dim (int): Dimension of the embedding space (D).
+        num_heads (int): Number of attention heads.
+        ff_dim (int): Dimension of the feed-forward network's inner layer.
+        ff_activation (str): Activation for the FFN. Defaults to 'relu'.
+        dropout_rate (float): Dropout rate for regularization.
+        name (Optional[str]): Name of the layer.
+    """
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        ff_dim: int,
+        ff_activation: str = 'relu',
+        dropout_rate: float = 0.1,
+        name: Optional[str] = None
+    ):
+        super().__init__(name)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.ff_dim = ff_dim
+        self.dropout_rate = dropout_rate
+
+        # Attention sub-layer
+        self.attn = MultiHeadAttention(embed_dim, num_heads)
+        
+        # Feed-forward network sub-layers
+        self.ffn1 = Dense(ff_dim, activation=ff_activation)
+        self.ffn2 = Dense(embed_dim)
+                
+        # Normalization layers
+        self.ln1 = LayerNorm()
+        self.ln2 = LayerNorm()
+        
+        # Dropout layers
+        self.dropout1 = Dropout(dropout_rate)
+        self.dropout2 = Dropout(dropout_rate)
+        
+        self.sub_layers = [self.attn, self.ffn1, self.ffn2, self.ln1, self.ln2, self.dropout1, self.dropout2]
+        self.gradients = {}
+
+    def build(self, input_shape: Tuple):
+        """Build sub-layers based on input shape."""
+        super().build(input_shape)
+        B, S, D = input_shape
+        assert D == self.embed_dim, f"Input dimension {D} does not match embed_dim {self.embed_dim}"
+        
+        # Build sub-layers
+        ffn_input_shape_flat = (B * S, D)
+        self.ffn1.build(ffn_input_shape_flat)
+        self.ffn2.build((B * S, self.ff_dim))
+
+        self.ln1.build(input_shape)
+        self.attn.build(input_shape)
+        self.ln2.build(input_shape)
+        
+        self.output_shape = input_shape
+
+    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+        """
+        Forward pass through the Transformer Encoder layer.
+        
+        Args:
+            inputs: Input tensor of shape (B, S, D)
+            training: Whether to run in training mode (affects dropout)
+            
+        Returns:
+            Output tensor of shape (B, S, D)
+        """
+        self.input = inputs
+        
+        # --- First Sub-layer: Multi-Head Attention ---
+        # Pre-normalization
+        ln1_out = self.ln1.forward(inputs, training)
+
+        # Attention
+        attn_output = self.attn.forward(ln1_out, training)
+
+        # Dropout and residual connection
+        attn_res = inputs + self.dropout1.forward(attn_output, training)
+        
+        # --- Second Sub-layer: Feed-Forward Network ---
+        # Pre-normalization
+        ln2_out = self.ln2.forward(attn_res, training)
+        
+        # FFN processing
+        B, S, D = ln2_out.shape
+        ffn_in_flat = ln2_out.reshape(B * S, D)
+        ffn_hidden = self.ffn1.forward(ffn_in_flat, training)
+        ffn_output_flat = self.ffn2.forward(ffn_hidden, training)
+        ffn_output = ffn_output_flat.reshape(B, S, D)
+        
+        # Dropout and residual connection
+        self.output = attn_res + self.dropout2.forward(ffn_output, training)
+        
+        return self.output
+
+    def backward(self, gradient: np.ndarray) -> np.ndarray:
+        """
+        Backward pass through the Transformer Encoder layer.
+        
+        Args:
+            gradient: Gradient tensor of shape (B, S, D) from the next layer.
+            
+        Returns:
+            Gradient with respect to the layer's inputs.
+        """
+        # --- Backprop through the second sub-layer (FFN) ---
+        # Backprop through the final residual connection
+        grad_attn_res = gradient.copy() # Gradient for the output of the first sub-layer
+        grad_ffn_dropout = gradient.copy() # Gradient for the output of the dropout layer
+
+        # Backprop through dropout2
+        grad_ffn_output = self.dropout2.backward(grad_ffn_dropout)
+        
+        # Reshape for FFN backprop
+        B, S, D = grad_ffn_output.shape
+        grad_ffn_output_flat = grad_ffn_output.reshape(B * S, D)
+        
+        # Backprop through ffn2 and ffn1
+        grad_ffn_hidden = self.ffn2.backward(grad_ffn_output_flat)
+        grad_ffn_in_flat = self.ffn1.backward(grad_ffn_hidden)
+        
+        # Reshape back to 3D
+        grad_ln2_out = grad_ffn_in_flat.reshape(B, S, D)
+        grad_attn_res += self.ln2.backward(grad_ln2_out)
+        
+        # --- Backprop through the first sub-layer (MHA) ---
+        # Backprop through the first residual connection
+        grad_inputs = grad_attn_res.copy() # Gradient for the original inputs
+        grad_attn_dropout = grad_attn_res.copy() # Gradient for the dropout1 output
+        
+        grad_attn_output = self.dropout1.backward(grad_attn_dropout)
+        grad_ln1_out = self.attn.backward(grad_attn_output)
+        grad_inputs += self.ln1.backward(grad_ln1_out)
+        
+        return grad_inputs
