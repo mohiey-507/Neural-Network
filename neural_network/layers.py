@@ -622,8 +622,7 @@ class MultiHeadAttention(BaseLayer):
         d_Vh = weights.transpose(0, 1, 3, 2) @ d_context_h  # (B,H,S,D/H)
 
         # softmax derivative
-        dw_times_w = d_weights * weights
-        d_scores = dw_times_w - weights * dw_times_w.sum(axis=-1, keepdims=True)
+        d_scores = weights * (d_weights - (d_weights * weights).sum(axis=-1, keepdims=True))
         d_scores /= np.sqrt(self.head_dim)
 
         d_Qh = d_scores @ Kh
@@ -784,6 +783,34 @@ class TransformerEncoderLayer(BaseLayer):
         
         grad_attn_output = self.dropout1.backward(grad_attn_dropout)
         grad_ln1_out = self.attn.backward(grad_attn_output)
-        grad_inputs += self.ln1.backward(grad_ln1_out)
+        
+        # Backprop through LayerNorm and combine with residual gradient
+        grad_inputs = self.ln1.backward(grad_ln1_out) + grad_attn_res
         
         return grad_inputs
+
+class PositionalEncoding(BaseLayer):
+    def __init__(self, max_len, embed_dim):
+        super().__init__()
+        self.max_len = max_len
+        self.embed_dim = embed_dim
+        self.trainable = False
+
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.output_shape = input_shape
+        self.pe = np.zeros((self.max_len, self.embed_dim))
+        position = np.arange(0, self.max_len, dtype=np.float32).reshape(-1, 1)
+        div_term = np.exp(np.arange(0, self.embed_dim, 2, dtype=np.float32) * -(np.log(10000.0) / self.embed_dim))
+        self.pe[:, 0::2] = np.sin(position * div_term)
+        self.pe[:, 1::2] = np.cos(position * div_term)
+        self.pe = self.pe.reshape((1, self.max_len, self.embed_dim))
+
+    def forward(self, inputs, training=True):
+        # inputs shape: (B, S, D)
+        seq_len = inputs.shape[1]
+        self.output = inputs + self.pe[:, :seq_len, :]
+        return self.output
+
+    def backward(self, gradient):
+        return gradient
