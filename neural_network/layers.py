@@ -814,3 +814,18 @@ class PositionalEncoding(BaseLayer):
 
     def backward(self, gradient):
         return gradient
+
+class GlobalAveragePooling1D(BaseLayer):
+    def __init__(self, name=None):
+        super().__init__(name)
+
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.output_shape = (input_shape[0], input_shape[2])
+
+    def forward(self, inputs, training=True):
+        self.input_shape = inputs.shape
+        return np.mean(inputs, axis=1)
+
+    def backward(self, gradient):
+        return np.tile(gradient / self.input_shape[1], (self.input_shape[1], 1, 1)).transpose(1, 0, 2)
