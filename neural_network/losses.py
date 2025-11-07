@@ -30,7 +30,7 @@ class Loss:
         mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             Computes the Mean Squared Error (MSE) loss.
 
-        mean_squared_error_derivative(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        mean_squared_error_gradient(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
             Computes the derivative of the MSE loss.
 
         binary_cross_entropy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -67,14 +67,14 @@ class Loss:
         return np.mean(np.square(y_true - y_pred))
     
     @staticmethod
-    def mean_squared_error_derivative(
+    def mean_squared_error_gradient(
         y_true: np.ndarray,
         y_pred: np.ndarray
     ) -> np.ndarray:
         """
-        Computes the derivative of the Mean Squared Error loss.
+        Computes the gradient of the Mean Squared Error loss.
 
-        The derivative of MSE is used during backpropagation to adjust weights.
+        The gradient of MSE is used during backpropagation to adjust weights.
 
         Args:
             y_true (np.ndarray): True target values.
@@ -126,7 +126,7 @@ class Loss:
         """
         epsilon = 1e-15
         y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
-        return - (y_true / y_pred) + (1 - y_true) / (1 - y_pred) / y_pred.shape[0]
+        return (y_pred - y_true) / y_true.shape[0]
 
     @staticmethod
     def categorical_cross_entropy(
