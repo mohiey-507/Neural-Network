@@ -14,28 +14,6 @@ Key Features:
     - Batch training with optional validation
     - Performance tracking via training history
 
-Usage:
-    To use the Network class, create an instance of the class, add layers, compile the 
-    model with a loss function and optimizer, and then call the fit method to train the 
-    network. For example:
-
-        from network import Network
-        from layers import Dense, Dropout
-        
-        # Create a network instance
-        model = Network()
-        
-        # Add layers to the model
-        model.add(Dense(units=64, activation='relu'))
-        model.add(Dropout(rate=0.5))
-        model.add(Dense(units=1, activation='sigmoid'))
-        
-        # Compile the model
-        model.compile(loss='binary_cross_entropy', optimizer='adam')
-        
-        # Train the model
-        history = model.fit(X_train, y_train, epochs=10, batch_size=32)
-
 Example:
     Below is a simple example demonstrating how to build and train a neural network:
 
@@ -431,5 +409,3 @@ class Network:
                 
 
         return history
-
-
