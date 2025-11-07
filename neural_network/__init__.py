@@ -1,6 +1,6 @@
 from .layers import (
     Dense, Flatten, Dropout, BatchNorm, LayerNorm, Embedding,
-    MultiHeadAttention, TransformerEncoderLayer
+    MultiHeadAttention, TransformerEncoderLayer, PositionalEncoding, GlobalAveragePooling1D
 )
 from .network import Network
 from .optimizers import SGD, Momentum, Adam
@@ -9,7 +9,8 @@ from .activation import Activation
 __all__ = [
     # Layer types
     'Dense', 'Flatten', 'Dropout', 'BatchNorm', 'LayerNorm', 'Embedding',
-    'MultiHeadAttention', 'TransformerEncoderLayer',
+    'MultiHeadAttention', 'TransformerEncoderLayer', 'PositionalEncoding',
+    'GlobalAveragePooling1D',
     
     # Network
     'Network',
