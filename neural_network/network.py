@@ -281,6 +281,9 @@ class Network:
         # Update weights
         self._update()
         
+        if isinstance(self.optimizer, Adam):
+            self.optimizer.t += 1
+
         return loss
 
     def predict(
@@ -379,6 +382,7 @@ class Network:
             # Train on batches
             epoch_loss = 0
             epoch_predictions = []
+            epoch_y_true = []
 
             for batch in range(n_batches):
                 start_idx = batch * batch_size
@@ -394,11 +398,13 @@ class Network:
                 # Collect predictions for accuracy calculation
                 batch_predictions = self._forward(X_batch, training=False)
                 epoch_predictions.append(batch_predictions)
+                epoch_y_true.append(y_batch)
 
             # Calculate training metrics
             epoch_loss /= n_batches
             epoch_predictions = np.vstack(epoch_predictions)
-            train_accuracy = self._calculate_accuracy(y_shuffled, epoch_predictions)
+            epoch_y_true = np.vstack(epoch_y_true)
+            train_accuracy = self._calculate_accuracy(epoch_y_true, epoch_predictions)
             
             history['loss'].append(epoch_loss)
             history['accuracy'].append(train_accuracy)
