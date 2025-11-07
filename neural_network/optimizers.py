@@ -225,7 +225,7 @@ class Adam(Optimizer):
         self.beta1 = beta1
         self.beta2 = beta2
         self.epsilon = epsilon
-        self.t = 0
+        self.t = 1
         self.m = {}  # First moment estimates
         self.v = {}  # Second moment estimates
     
@@ -276,7 +276,6 @@ class Adam(Optimizer):
         updating the parameter in place.
         """
         if hasattr(layer, gradient_key):
-            self.t += 1
             param_key = f'layer_{self.layers.index(layer)}_{gradient_key}'
             
             # Initialize m and v if they don't exist
