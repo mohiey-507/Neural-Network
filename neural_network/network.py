@@ -266,7 +266,8 @@ class Network:
 
     def predict(
             self,
-            X: np.ndarray
+            X: np.ndarray,
+            batch_size: int = 32
     ) -> np.ndarray:
         """
         Make predictions using the trained network.
@@ -276,11 +277,20 @@ class Network:
         
         Args:
             X (np.ndarray): Input data for which predictions are to be made.
+            batch_size (int): The batch size to use for prediction.
         
         Returns:
             np.ndarray: The predicted output.
         """
-        return self._forward(X, training=False)
+        n_samples = X.shape[0]
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        predictions = []
+        for i in range(n_batches):
+            start = i * batch_size
+            end = start + batch_size
+            X_batch = X[start:end]
+            predictions.append(self._forward(X_batch, training=False))
+        return np.vstack(predictions)
     
     def _calculate_accuracy(
             self, 
@@ -310,6 +320,45 @@ class Network:
             label = np.argmax(y_pred, axis=1)
             y_true = np.argmax(y_true, axis=1)
         return np.mean(label == y_true)
+
+    def evaluate(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        batch_size: int = 32
+    ) -> Tuple[float, float]:
+        """
+        Evaluate the model on a given dataset.
+
+        Args:
+            X (np.ndarray): Input data.
+            y (np.ndarray): True labels.
+            batch_size (int): The batch size to use for evaluation.
+
+        Returns:
+            A tuple containing the loss and accuracy.
+        """
+        n_samples = X.shape[0]
+        n_batches = (n_samples + batch_size - 1) // batch_size
+
+        total_loss = 0
+        total_correct = 0
+
+        for i in range(n_batches):
+            start = i * batch_size
+            end = start + batch_size
+            X_batch = X[start:end]
+            y_batch = y[start:end]
+
+            preds = self._forward(X_batch, training=False)
+            total_loss += self.loss_func(y_batch, preds) * len(X_batch)
+            total_correct += np.sum(self._calculate_accuracy(y_batch, preds) * len(y_batch))
+
+        loss = total_loss / n_samples
+        accuracy = total_correct / n_samples
+
+        return loss, accuracy
+
 
     def fit(
             self, 
@@ -359,30 +408,25 @@ class Network:
 
             # Train on batches
             epoch_loss = 0
-            epoch_predictions = []
-            epoch_y_true = []
+            epoch_correct = 0
 
             for batch in range(n_batches):
                 start_idx = batch * batch_size
                 end_idx = min((batch + 1) * batch_size, n_samples)
 
-                            
-                X_batch = X_shuffled[start_idx: end_idx]
-                y_batch = y_shuffled[start_idx: end_idx]
+                X_batch = X_shuffled[start_idx:end_idx]
+                y_batch = y_shuffled[start_idx:end_idx]
 
                 batch_loss = self._train_on_batch(X_batch, y_batch)
                 epoch_loss += batch_loss
 
-                # Collect predictions for accuracy calculation
+                # Calculate accuracy on the batch and accumulate correct predictions
                 batch_predictions = self._forward(X_batch, training=False)
-                epoch_predictions.append(batch_predictions)
-                epoch_y_true.append(y_batch)
+                epoch_correct += np.sum(self._calculate_accuracy(y_batch, batch_predictions) * len(y_batch))
 
             # Calculate training metrics
             epoch_loss /= n_batches
-            epoch_predictions = np.vstack(epoch_predictions)
-            epoch_y_true = np.vstack(epoch_y_true)
-            train_accuracy = self._calculate_accuracy(epoch_y_true, epoch_predictions)
+            train_accuracy = epoch_correct / n_samples
             
             history['loss'].append(epoch_loss)
             history['accuracy'].append(train_accuracy)
@@ -390,9 +434,7 @@ class Network:
             # Validation
             if validation_data is not None:
                 val_X, val_y = validation_data
-                val_predictions = self._forward(val_X, training=False)
-                val_loss = self.loss_func(val_y, val_predictions)
-                val_accuracy = self._calculate_accuracy(val_y, val_predictions)
+                val_loss, val_accuracy = self.evaluate(val_X, val_y, batch_size)
                 
                 history['val_loss'].append(val_loss)
                 history['val_accuracy'].append(val_accuracy)
