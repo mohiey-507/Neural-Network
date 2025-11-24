@@ -181,17 +181,14 @@ class Activation:
         exps = np.exp(x - np.max(x, axis=1, keepdims=True))
         return exps / np.sum(exps, axis=1, keepdims=True)
     
-    def softmax_gradient(x: np.ndarray) -> np.ndarray:
+    def softmax_gradient(x: np.ndarray) -> int:
         """
         Computes the gradient of the softmax function.
-
-        The gradient is used during backpropagation to update weights in neural networks.
 
         Args:
             x (np.ndarray): Input array, typically the output of the softmax function.
 
         Returns:
-            np.ndarray: Output array containing the gradient of the softmax function at 
-                        each input point.
+            np.ndarray: An array of ones with the same shape as the input.
         """
-        return x * (1 - x)
+        return np.ones_like(x)

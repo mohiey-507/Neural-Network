@@ -167,6 +167,4 @@ class Loss:
         Returns:
             np.ndarray: The gradient of the Categorical Cross-Entropy loss.
         """
-        epsilon = 1e-15
-        y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
-        return - (y_true / y_pred) / y_pred.shape[0]
+        return (y_pred - y_true) / y_pred.shape[0]
