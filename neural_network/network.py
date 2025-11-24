@@ -174,10 +174,11 @@ class Network:
             training: bool = True
     ) -> np.ndarray:
         """
-        Perform a forward pass through all layers.
+        Perform a forward pass through all layers, handling masks for padded sequences.
         
         This method computes the output of the network by passing the input
-        data through each layer in sequence.
+        data through each layer in sequence. It also creates and propagates a mask
+        if the model starts with an Embedding layer configured to mask zeros.
         
         Args:
             X (np.ndarray): Input data to the network.
@@ -187,8 +188,26 @@ class Network:
             np.ndarray: The output of the network after the forward pass.
         """
         output = X
+        mask = None
+        
+        # Create mask from input if the first layer is a masking Embedding layer
+        if self.layers and hasattr(self.layers[0], 'mask_zero') and self.layers[0].mask_zero:
+            # The mask should identify where the input is not zero.
+            mask = (X != 0)
+
         for layer in self.layers:
-            output = layer.forward(output, training)
+            # Pass the mask to layers that can accept it
+            if 'mask' in layer.forward.__code__.co_varnames:
+                output = layer.forward(output, training=training, mask=mask)
+            else:
+                output = layer.forward(output, training=training)
+            
+            # Handle layers that return (output, mask) tuple (like Embedding)
+            if isinstance(output, tuple):
+                output, new_mask = output
+                if new_mask is not None:
+                    mask = new_mask
+        
         return output
     
     def _backward(

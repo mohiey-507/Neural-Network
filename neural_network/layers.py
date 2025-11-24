@@ -251,6 +251,9 @@ class Dense(BaseLayer):
         if not self.activation:
             return gradient
 
+        if self.activation in ('sigmoid', 'softmax'):
+            return gradient
+
         activation_gradient_fn = getattr(Activation, self.activation + '_gradient', None)
         if activation_gradient_fn is not None:
             return gradient * activation_gradient_fn(self.output)
@@ -484,16 +487,21 @@ class Embedding(BaseLayer):
         """
         super().build(input_shape) # (B, S)
         self.embeddings = np.random.uniform(-self.init_scale, self.init_scale, size=(self.vocab_size, self.embed_dim)).astype(float)
+        if self.mask_zero:
+            self.embeddings[0] = 0
         self.output_shape = (input_shape[0], input_shape[1], self.embed_dim)
 
     def forward(
         self, 
         inputs: np.ndarray,
-        training: bool = True
-    ) -> np.ndarray:
+        training: bool = True,
+        mask: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         self.input = inputs.astype(int)
         out = self.embeddings[self.input]
-        return out
+        mask = (self.input != 0)
+
+        return out, mask
 
     def backward(
         self, 
@@ -570,7 +578,7 @@ class MultiHeadAttention(BaseLayer):
         self.output_shape = input_shape
 
     # ---------------------------------------------------------------------
-    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(self, inputs: np.ndarray, training: bool = True, mask: Optional[np.ndarray] = None) -> np.ndarray:
         self.input = inputs  # cache for residual math
         B, S, D = inputs.shape
 
@@ -585,6 +593,10 @@ class MultiHeadAttention(BaseLayer):
 
         # 3. scaled dot-product attention
         scores = Qh @ Kh.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)  # (B,H,S,S)
+        
+        if mask is not None:
+            scores = np.where(mask[:, np.newaxis, np.newaxis, :] == 0, -1e9, scores)
+
         weights = np.exp(scores - scores.max(axis=-1, keepdims=True))
         weights /= weights.sum(axis=-1, keepdims=True)
 
@@ -707,7 +719,7 @@ class TransformerEncoderLayer(BaseLayer):
         
         self.output_shape = input_shape
 
-    def forward(self, inputs: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(self, inputs: np.ndarray, training: bool = True, mask: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Forward pass through the Transformer Encoder layer.
         
@@ -725,7 +737,7 @@ class TransformerEncoderLayer(BaseLayer):
         ln1_out = self.ln1.forward(inputs, training)
 
         # Attention
-        attn_output = self.attn.forward(ln1_out, training)
+        attn_output = self.attn.forward(ln1_out, training, mask=mask)
 
         # Dropout and residual connection
         attn_res = inputs + self.dropout1.forward(attn_output, training)
@@ -818,14 +830,43 @@ class PositionalEncoding(BaseLayer):
 class GlobalAveragePooling1D(BaseLayer):
     def __init__(self, name=None):
         super().__init__(name)
+        self.mask = None
 
     def build(self, input_shape):
         super().build(input_shape)
         self.output_shape = (input_shape[0], input_shape[2])
 
-    def forward(self, inputs, training=True):
-        self.input_shape = inputs.shape
-        return np.mean(inputs, axis=1)
+    def forward(self, inputs, training=True, mask=None):
+        if mask is not None:
+            self.mask = mask
+        else:
+            self.mask = np.any(inputs != 0, axis=-1)  # (B, S)
+
+        masked_inputs = inputs * self.mask[:, :, np.newaxis]
+        summed_inputs = np.sum(masked_inputs, axis=1)  # (B, D)
+
+        # Count non-padded tokens per sequence
+        num_non_padded = np.sum(self.mask, axis=1, keepdims=True)  # (B, 1)
+
+        # Avoid division by zero for sequences with only padding
+        num_non_padded[num_non_padded == 0] = 1
+
+        return summed_inputs / num_non_padded
 
     def backward(self, gradient):
-        return np.tile(gradient / self.input_shape[1], (self.input_shape[1], 1, 1)).transpose(1, 0, 2)
+        B, S, D = self.mask.shape[0], self.mask.shape[1], gradient.shape[1]
+        
+        # Count non-padded tokens per sequence
+        num_non_padded = np.sum(self.mask, axis=1, keepdims=True) # (B, 1)
+        num_non_padded[num_non_padded == 0] = 1
+
+        # Expand gradient
+        expanded_grad = gradient[:, np.newaxis, :]  # (B, 1, D)
+
+        # Distribute gradient only to non-padded tokens, 
+        # gradient for each valid token is grad / num_valid_tokens
+        distributed_grad = expanded_grad / num_non_padded[:, :, np.newaxis]
+
+        masked_grad = distributed_grad * self.mask[:, :, np.newaxis]
+        
+        return masked_grad
